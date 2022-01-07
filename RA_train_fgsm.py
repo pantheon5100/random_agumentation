@@ -60,6 +60,11 @@ def get_args():
 
 def main():
     args = get_args()
+    args.out_dir = args.out_dir + f"epochs_{args.epochs}-lr_schedule_{args.lr_schedule}-lr_max_{args.lr_max}-epsilon_{args.epsilon}-alpha_{args.alpha}-delta_init_{args.delta_init}"
+    if args.random_agumentation:
+        args.out_dir = args.out_dir + f"random_agumentation-ra_type_{args.ra_type}-ra_size_{args.ra_size}"
+
+
     args.experiment_name = args.out_dir
 
     args.out_dir = os.path.join("experiment_log", "exp0107", args.out_dir)
@@ -130,6 +135,7 @@ def main():
     prev_robust_acc = 0.
     start_train_time = time.time()
     logger.info('Epoch \t Seconds \t LR \t \t Train Loss \t Train Acc')
+    training_time_accumelater = 0
     for epoch in range(args.epochs):
         start_epoch_time = time.time()
         train_loss = 0
@@ -207,9 +213,10 @@ def main():
         lr = scheduler.get_lr()[0]
         logger.info('%d \t %.1f \t \t %.4f \t %.4f \t %.4f',
             epoch, epoch_time - start_epoch_time, lr, train_loss/train_n, train_acc/train_n)
+        training_time_accumelater += epoch_time - start_epoch_time
 
         model.eval()
-        pgd_loss, pgd_acc = evaluate_pgd(val_loader, model, 50, 1, epsilon, alpha, opt=opt, logger=logger)
+        pgd_loss, pgd_acc = evaluate_pgd(val_loader, model, 50, 1, epsilon, test_alpha, opt=opt, logger=logger)
         test_loss, test_acc = evaluate_standard(val_loader, model)
         model.train()
 
@@ -230,11 +237,14 @@ def main():
     model_test.float()
     model_test.eval()
 
-    pgd_loss, pgd_acc = evaluate_pgd(test_loader, model_test, 50, 10, logger=logger)
+    pgd_loss, pgd_acc = evaluate_pgd(test_loader, model_test, 50, 10, epsilon, test_alpha, logger=logger)
     test_loss, test_acc = evaluate_standard(test_loader, model_test)
 
     logger.info('Test Loss \t Test Acc \t PGD Loss \t PGD Acc')
     logger.info('%.4f \t \t %.4f \t %.4f \t %.4f', test_loss, test_acc, pgd_loss, pgd_acc)
+
+    logger.info('Training Time Consuming ')
+
 
 if __name__ == "__main__":
     main()
