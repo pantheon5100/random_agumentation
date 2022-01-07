@@ -100,8 +100,8 @@ def attack_pgd(model, X, y, epsilon, alpha, attack_iters, restarts, opt=None):
     return max_delta
 
 
-def evaluate_pgd(test_loader, model, attack_iters, restarts, logger=None, opt=None):
-    epsilon = (8 / 255.) / std
+def evaluate_pgd(test_loader, model, attack_iters, restarts, epsilon, alpha, logger=None, opt=None):
+    # epsilon = (8 / 255.) / std
     alpha = (2 / 255.) / std
     pgd_loss = 0
     pgd_acc = 0

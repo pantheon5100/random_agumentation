@@ -5,6 +5,8 @@ import os
 import time
 import glob
 
+import setGPU
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -17,11 +19,9 @@ import torch.autograd as autograd
 from preact_resnet import PreActResNet18
 from utils import (upper_limit, lower_limit, std, clamp, get_loaders,
     attack_pgd, evaluate_pgd, evaluate_standard)
-from utils import rob_acc, l2_norm_batch, get_input_grad, clamp
 
 logger = logging.getLogger(__name__)
 
-import setGPU
 from torch.utils.tensorboard import SummaryWriter
 import shutil
 
@@ -61,8 +61,8 @@ def get_args():
 def main():
     args = get_args()
     args.experiment_name = args.out_dir
-    
-    args.out_dir = os.path.join("experiment_log", "exp0106", args.out_dir)
+
+    args.out_dir = os.path.join("experiment_log", "exp0107", args.out_dir)
 
     if not os.path.exists(args.out_dir):
         os.makedirs(args.out_dir)
@@ -101,6 +101,10 @@ def main():
     epsilon = (args.epsilon / 255.) / std
     alpha = (args.alpha / 255.) / std
     pgd_alpha = (2 / 255.) / std
+    if args.epsilon == 8:
+        test_alpha = (2 / 255.) / std
+    else:
+        test_alpha = (4 / 255.) / std
 
     model = PreActResNet18().cuda()
     model.train()
@@ -142,7 +146,7 @@ def main():
                 elif args.ra_type == "normal":
                     noise = torch.randn(X.shape).cuda()
                     noise = (3*args.epsilon*noise)/255
-                noise.data = clamp(delta, lower_limit - X, upper_limit - X)
+                noise.data = clamp(noise, lower_limit - X, upper_limit - X)
 
             if i == 0:
                 first_batch = (X, y)
@@ -164,19 +168,19 @@ def main():
             output = model(X + delta[:X.size(0)])
             loss = criterion(output, y)
 
-            # add grad align method
-            reg = torch.zeros(1).cuda()[0]  # for .item() to run correctly
-            if args.grad_align_cos_lambda != 0.0:
-                grad2 = get_input_grad(model, X, y, opt, epsilon, True, delta_init='random_uniform', backprop=True)
-                grads_nnz_idx = ((grad**2).sum([1, 2, 3])**0.5 != 0) * ((grad2**2).sum([1, 2, 3])**0.5 != 0)
-                grad1, grad2 = grad[grads_nnz_idx], grad2[grads_nnz_idx]
-                grad1_norms, grad2_norms = l2_norm_batch(grad1), l2_norm_batch(grad2)
-                grad1_normalized = grad1 / grad1_norms[:, None, None, None]
-                grad2_normalized = grad2 / grad2_norms[:, None, None, None]
-                cos = torch.sum(grad1_normalized * grad2_normalized, (1, 2, 3))
-                reg += args.grad_align_cos_lambda * (1.0 - cos.mean())
+            # # add grad align method
+            # reg = torch.zeros(1).cuda()[0]  # for .item() to run correctly
+            # if args.grad_align_cos_lambda != 0.0:
+            #     grad2 = get_input_grad(model, X, y, opt, epsilon, True, delta_init='random_uniform', backprop=True)
+            #     grads_nnz_idx = ((grad**2).sum([1, 2, 3])**0.5 != 0) * ((grad2**2).sum([1, 2, 3])**0.5 != 0)
+            #     grad1, grad2 = grad[grads_nnz_idx], grad2[grads_nnz_idx]
+            #     grad1_norms, grad2_norms = l2_norm_batch(grad1), l2_norm_batch(grad2)
+            #     grad1_normalized = grad1 / grad1_norms[:, None, None, None]
+            #     grad2_normalized = grad2 / grad2_norms[:, None, None, None]
+            #     cos = torch.sum(grad1_normalized * grad2_normalized, (1, 2, 3))
+            #     reg += args.grad_align_cos_lambda * (1.0 - cos.mean())
 
-            loss += reg
+            # loss += reg
 
 
 
@@ -205,7 +209,7 @@ def main():
             epoch, epoch_time - start_epoch_time, lr, train_loss/train_n, train_acc/train_n)
 
         model.eval()
-        pgd_loss, pgd_acc = evaluate_pgd(val_loader, model, 50, 1, epsilon, pgd_alpha, opt=opt, logger=logger)
+        pgd_loss, pgd_acc = evaluate_pgd(val_loader, model, 50, 1, epsilon, alpha, opt=opt, logger=logger)
         test_loss, test_acc = evaluate_standard(val_loader, model)
         model.train()
 
