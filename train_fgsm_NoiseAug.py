@@ -48,10 +48,10 @@ def get_args():
     parser.add_argument('--loss-scale', default='1.0', type=str, choices=['1.0', 'dynamic'],
         help='If loss_scale is "dynamic", adaptively adjust the loss scale over time')
 
-    # when we use random agumentation, we should set delta initialization to zero
-    parser.add_argument('--random_augmentation', action='store_true')
-    parser.add_argument('--ra_type', default='normal', type=str, help='Change random agumentation type.')
-    parser.add_argument('--ra_size', default=1, type=float, help='Change random agumentation size.')
+    # when we use noise agumentation, removing delta initialization yields better performance
+    parser.add_argument('--noise_aug', action='store_true')
+    parser.add_argument('--noise_aug_type', default='normal', type=str, help='Change noise augmentation type.')
+    parser.add_argument('--noise_aug_size', default=1, type=float, help='Change noise augmenttion  size.')
 
     # paper method grad align
     parser.add_argument('--grad-align-cos-lambda', default=0.0, type=float)
@@ -66,8 +66,6 @@ def get_args():
 
     parser.add_argument('--master-weights', action='store_true',
         help='Maintain FP32 master weights to accompany any FP16 model weights, not applicable for O1 opt level')
-    
-    parser.add_argument('--comment', default='', type=str)
     return parser.parse_args()
 
 
@@ -91,13 +89,13 @@ def main():
 
 
     if args.random_augmentation:
-        args.out_dir = args.out_dir + f"-random_augmentation-ra_type_{args.ra_type}-ra_size_{args.ra_size}-"
+        args.out_dir = args.out_dir + f"-NoiseAug-_type_{args.noise_aug_type}-noise_aug_size_{args.noise_aug_size}-"
     if args.grad_align_cos_lambda != 0.0:
         args.out_dir = args.out_dir + f"-grad_align_cos_lambda_{args.grad_align_cos_lambda}-"
     if args.out_align_method != "none":
         args.out_dir = args.out_dir + f"-out_align_method_{args.out_align_method}"
 
-    args.out_dir = args.out_dir + f"-epochs_{args.epochs}-lr_schedule_{args.lr_schedule}-lr_max_{args.lr_max}-epsilon_{args.epsilon}-alpha_{args.alpha}-delta_init_{args.delta_init}-seed_{args.seed}" + args.comment
+    args.out_dir = args.out_dir + f"-epochs_{args.epochs}-lr_schedule_{args.lr_schedule}-lr_max_{args.lr_max}-epsilon_{args.epsilon}-alpha_{args.alpha}-delta_init_{args.delta_init}-seed_{args.seed}"
 
     args.experiment_name = args.out_dir
 
@@ -179,17 +177,18 @@ def main():
         for i, (X, y) in enumerate(train_loader):
             X, y = X.cuda(), y.cuda()
 
-            if args.random_augmentation:
+            if args.noise_aug:
                 noise = torch.zeros_like(X).cuda()
-                if args.ra_type == "uniform":
+                if args.noise_aug_type == "uniform":
                     for j in range(len(epsilon)):
-                        noise[:, j, :, :].uniform_(-args.ra_size * epsilon[j][0][0].item(), args.ra_size*epsilon[j][0][0].item())
-                elif args.ra_type == "normal":
+                        noise[:, j, :, :].uniform_(-args.noise_aug_size * epsilon[j][0][0].item(), args.noise_aug_size*epsilon[j][0][0].item())
+                elif args.noise_aug_type == "normal":
                     noise = torch.randn(X.shape).cuda()
                     for j in range(len(epsilon)):
-                        noise[:, j, :, :] = args.ra_size*epsilon[j][0][0].item() * noise[:, j, :, :]
-                    # noise = (args.ra_size*args.epsilon*noise)/255
+                        noise[:, j, :, :] = args.noise_aug_size*epsilon[j][0][0].item() * noise[:, j, :, :]
+                    # noise = (args.noise_aug_size*args.epsilon*noise)/255
                 noise.data = clamp(noise, lower_limit - X, upper_limit - X)
+                X = X + noise
 
             if i == 0:
                 first_batch = (X, y)

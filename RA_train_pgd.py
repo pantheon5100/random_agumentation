@@ -10,7 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from preact_resnet import PreActResNet18
-from utils import (upper_limit, lower_limit, std, clamp, get_loaders,
+from utils import (clamp, get_loaders,
     evaluate_pgd, evaluate_standard)
 
 logger = logging.getLogger(__name__)
@@ -40,11 +40,35 @@ def get_args():
         help='If loss_scale is "dynamic", adaptively adjust the loss scale over time')
     parser.add_argument('--master-weights', action='store_true',
         help='Maintain FP32 master weights to accompany any FP16 model weights, not applicable for O1 opt level')
+    
+    
+    
+    
+
+    # whether normalize image
+    parser.add_argument('--image_normalize', action='store_true')
+
     return parser.parse_args()
 
 
 def main():
     args = get_args()
+
+    if args.image_normalize:
+        args.out_dir = args.out_dir + f"-image_normalize-"
+        cifar10_mean = (0.4914, 0.4822, 0.4465)
+        cifar10_std = (0.2471, 0.2435, 0.2616)
+    else:
+        args.out_dir = args.out_dir + f"-remove_image_normalize-"
+        cifar10_mean = (0., 0., 0.)
+        cifar10_std = (1., 1., 1.)
+
+    mu = torch.tensor(cifar10_mean).view(3,1,1).cuda()
+    std = torch.tensor(cifar10_std).view(3,1,1).cuda()
+
+    upper_limit = ((1 - mu)/ std)
+    lower_limit = ((0 - mu)/ std)
+
 
     if not os.path.exists(args.out_dir):
         os.mkdir(args.out_dir)
@@ -63,10 +87,14 @@ def main():
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed(args.seed)
 
-    train_loader, test_loader, val_loader = get_loaders(args.data_dir, args.batch_size)
+    train_loader, test_loader, val_loader = get_loaders(args.data_dir, args.batch_size, args.image_normalize, cifar10_mean, cifar10_std)
 
     epsilon = (args.epsilon / 255.) / std
     alpha = (args.alpha / 255.) / std
+    if args.epsilon == 8:
+        test_alpha = (2 / 255.) / std
+    else:
+        test_alpha = (4 / 255.) / std
 
     model = PreActResNet18().cuda()
     model.train()
@@ -136,10 +164,9 @@ def main():
             epoch, epoch_time - start_epoch_time, lr, train_loss/train_n, train_acc/train_n)
 
         model.eval()
-        pgd_loss, pgd_acc = evaluate_pgd(val_loader, model, 50, 1, epsilon,opt=opt, logger=logger)
+        pgd_loss, pgd_acc = evaluate_pgd(val_loader, model, 50, 1, epsilon, test_alpha, lower_limit, upper_limit, opt=opt, logger=logger)        
         test_loss, test_acc = evaluate_standard(val_loader, model)
         model.train()
-
 
     train_time = time.time()
     torch.save(model.state_dict(), os.path.join(args.out_dir, 'model.pth'))
@@ -151,7 +178,7 @@ def main():
     model_test.float()
     model_test.eval()
 
-    pgd_loss, pgd_acc = evaluate_pgd(test_loader, model_test, 50, 10)
+    pgd_loss, pgd_acc = evaluate_pgd(test_loader, model_test, 50, 10, epsilon, test_alpha, lower_limit, upper_limit, logger=logger)
     test_loss, test_acc = evaluate_standard(test_loader, model_test)
 
     logger.info('Test Loss \t Test Acc \t PGD Loss \t PGD Acc')
