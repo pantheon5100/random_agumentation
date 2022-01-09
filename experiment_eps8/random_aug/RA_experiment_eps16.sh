@@ -1,8 +1,9 @@
 ALIGN_TETHOD="KL_AE_NAE NAE2GT"
+ALIGH_NOISE_SIZE="1 2"
 
 
 for align_method in $ALIGN_TETHOD; do
-    for i in {1..2};do
+    for i in $ALIGH_NOISE_SIZE;do
         python RA_train_fgsm.py --batch-size 128 \
                 --data-dir /dev/shm \
                 --epochs 30 \
@@ -18,7 +19,7 @@ for align_method in $ALIGN_TETHOD; do
                 --out_align_method $align_method \
                 --out_align_noise $i \
                 --image_normalize \
-                --comment fj_0108_20pm
+                --comment fj_0109_21pm
     done
 done
 

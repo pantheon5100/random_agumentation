@@ -8,7 +8,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import wandb
 
 from preact_resnet import PreActResNet18
 from utils import (clamp, get_loaders, evaluate_standard, evaluate_pgd)
@@ -16,7 +15,6 @@ from utils import (clamp, get_loaders, evaluate_standard, evaluate_pgd)
 import shutil
 import glob
 
-# from alive_progress import alive_it
 
 
 logger = logging.getLogger(__name__)
@@ -243,7 +241,6 @@ def main():
             prev_robust_acc = robust_acc
             best_state_dict = copy.deepcopy(model.state_dict())
 
-            # wandb.log({"training_ra_acc": train_acc/train_n, "training_ra_loss":train_loss/train_n}, step=GLOBAL_STEP, commit=False)
 
         epoch_time = time.time()
         lr = scheduler.get_lr()[0]

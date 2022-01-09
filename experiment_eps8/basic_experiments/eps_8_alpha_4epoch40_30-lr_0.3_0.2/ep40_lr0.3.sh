@@ -7,8 +7,8 @@ do
     --lr-min 0. \
     --lr-max 0.3 \
     --weight-decay 5e-4 \
-    --epsilon 16 \
-    --alpha 8 \
+    --epsilon 8 \
+    --alpha 4 \
     --attack-iters 2 \
     --delta-init zero \
     --out-dir PGD_baseline \

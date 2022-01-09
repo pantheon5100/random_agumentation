@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from torchvision import datasets, transforms
 from torch.utils.data.sampler import SubsetRandomSampler
 import numpy as np
+from torchattacks.attacks import autoattack 
 
 # cifar10_mean = (0.4914, 0.4822, 0.4465)
 # cifar10_std = (0.2471, 0.2435, 0.2616)
@@ -148,3 +149,29 @@ def evaluate_standard(test_loader, model):
             test_acc += (output.max(1)[1] == y).sum().item()
             n += y.size(0)
     return test_loss/n, test_acc/n
+
+
+def evaluate_auto(test_loader, model, epsilon, logger=None):
+    # epsilon = (8 / 255.) / std
+    # alpha = (2 / 255.) / std
+    auto_loss = 0
+    auto_acc = 0
+    n = 0
+    model.eval()
+    attack = autoattack(model, norm='Linf', eps=epsilon, version='standard', n_classes=10, seed=None, verbose=False)
+    for i, (X, y) in enumerate(test_loader):
+        X, y = X.cuda(), y.cuda()
+        #pgd_delta = attack_autoattack(model, X, y, epsilon, alpha, attack_iters, restarts, lower_limit, upper_limit, opt=opt)
+        adv_images = attack(X, y)
+        with torch.no_grad():
+            # output = model(X + pgd_delta)
+            output = model(adv_images)
+            loss = F.cross_entropy(output, y)
+            auto_loss += loss.item() * y.size(0)
+            auto_acc += (output.max(1)[1] == y).sum().item()
+            n += y.size(0)
+            print('batch id: %d, autoattack accuracy: %f'%(i, auto_acc/n), flush=True)
+            if logger is not None:
+                logger.info('batch id: %d, autoattack accuracy: %f', i, auto_acc/n)
+
+    return auto_loss/n, auto_acc/n

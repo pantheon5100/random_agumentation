@@ -2,7 +2,7 @@ import argparse
 import logging
 import os
 import time
-#import setGPU
+import setGPU
 import apex.amp as amp
 import numpy as np
 import torch
@@ -15,6 +15,8 @@ from utils import (clamp, get_loaders, evaluate_standard, evaluate_pgd)
 
 import shutil
 import glob
+
+
 
 # from alive_progress import alive_it
 
@@ -85,10 +87,11 @@ def main():
     upper_limit = ((1 - mu)/ std)
     lower_limit = ((0 - mu)/ std)
 
-    # log_files/NoiseAug/PGD_baseline-image_normalize--NoiseAug-_type_uniform-noise_aug_size_2.0--epochs_40-lr_schedule_cyclic-lr_max_0.2-epsilon_16-attack_steps_2-alpha_8.0-delta_init_zero-zero_one_clamp_0-seed_1/20220108145735
-    # log_files/NoiseAug/PGD_baseline-image_normalize--NoiseAug-_type_uniform-noise_aug_size_2.0--epochs_30-lr_schedule_cyclic-lr_max_0.3-epsilon_16-attack_steps_2-alpha_8.0-delta_init_zero-zero_one_clamp_0-seed_1/20220108145735
-    # log_files/NoiseAug/PGD_baseline-image_normalize--epochs_30-lr_schedule_cyclic-lr_max_0.3-epsilon_16-attack_steps_3-alpha_6.6666-delta_init_zero-zero_one_clamp_1-seed_1/20220108142635/output.log
-    testing_file = "log_files/NoiseAug/PGD_baseline-image_normalize--NoiseAug-_type_uniform-noise_aug_size_2.0--epochs_40-lr_schedule_cyclic-lr_max_0.2-epsilon_16-attack_steps_2-alpha_8.0-delta_init_zero-zero_one_clamp_0-seed_2/20220108173245/model.pth"
+    #testing_file = "log_files/NoiseAug/PGD_baseline-image_normalize--NoiseAug-_type_uniform-noise_aug_size_2.0--epochs_40-lr_schedule_cyclic-lr_max_0.2-epsilon_16-attack_steps_2-alpha_8.0-delta_init_zero-zero_one_clamp_0-seed_1/20220108145735/model.pth"
+    #testing_file = "log_files/NoiseAug/PGD_baseline-image_normalize--NoiseAug-_type_uniform-noise_aug_size_2.0--epochs_30-lr_schedule_cyclic-lr_max_0.3-epsilon_16-attack_steps_2-alpha_8.0-delta_init_zero-zero_one_clamp_0-seed_1/20220108145735/model.pth"
+    testing_file ="log_files/NoiseAug/PGD_baseline-image_normalize--epochs_30-lr_schedule_cyclic-lr_max_0.3-epsilon_16-attack_steps_3-alpha_6.6666-delta_init_zero-zero_one_clamp_1-seed_1/20220108142635/model.pth"
+    # TE
+    #testing_file = "log_files/NoiseAug/PGD_baseline-image_normalize--NoiseAug-_type_uniform-noise_aug_size_2.0--epochs_40-lr_schedule_cyclic-lr_max_0.2-epsilon_16-attack_steps_2-alpha_8.0-delta_init_zero-zero_one_clamp_0-seed_2/20220108173245/model.pth"
     state_dict_loaded = torch.load(testing_file)
 
     logfile = "/".join(testing_file.split("/")[:-2]) + "/testing.log"
@@ -114,8 +117,8 @@ def main():
     _, test_loader, _ = get_loaders(args.data_dir, args.batch_size, args.image_normalize, cifar10_mean, cifar10_std)
 
 
-    #pgd_loss, pgd_acc = evaluate_pgd(test_loader, model_test, 50, 10, epsilon, test_alpha, lower_limit, upper_limit, opt=None, logger=logger)
-    pgd_loss, pgd_acc = evaluate_pgd(test_loader, model_test, 50, 1, epsilon, test_alpha, lower_limit, upper_limit, opt=None, logger=logger)
+    pgd_loss, pgd_acc = evaluate_pgd(test_loader, model_test, 50, 10, epsilon, test_alpha, lower_limit, upper_limit, opt=None, logger=logger)
+    #pgd_loss, pgd_acc = evaluate_pgd(test_loader, model_test, 50, 1, epsilon, test_alpha, lower_limit, upper_limit, opt=None, logger=logger)
     test_loss, test_acc = evaluate_standard(test_loader, model_test)
 
 
