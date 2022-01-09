@@ -61,7 +61,7 @@ def get_loaders(dir_, batch_size, image_normalize, cifar10_mean, cifar10_std):
     )
     test_loader = torch.utils.data.DataLoader(
         dataset=test_dataset,
-        batch_size=512,
+        batch_size=batch_size,
         shuffle=False,
         pin_memory=True,
         num_workers=2,
@@ -69,12 +69,12 @@ def get_loaders(dir_, batch_size, image_normalize, cifar10_mean, cifar10_std):
 
     val_loader = torch.utils.data.DataLoader(
         dataset=val_dataset,
-        batch_size=512,
+        batch_size=batch_size,
         shuffle=False,
         pin_memory=True,
         num_workers=2,
     )
-    
+
     return train_loader, test_loader, val_loader
 
 

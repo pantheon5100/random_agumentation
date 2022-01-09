@@ -95,11 +95,6 @@ def main():
 
     args.out_dir = os.path.join(curretn_dir, args.out_dir, time_stamp)
 
-
-    # wandb logging
-    # wandb.init(name=args.out_dir, project="fast_adversarial", entity="kaistssl")
-    # wandb.config.update(args)
-
     # create tensorboard summary wirter
     writer = SummaryWriter(comment=args.experiment_name)
 
@@ -107,30 +102,6 @@ def main():
     ################################################################
     # training code saving
     ################################################################
-    # RUN_ID = wandb.run.id
-    # from datetime import datetime
-    # timestamp = datetime.now().strftime("%Y%m%d")
-
-    # expdir = f"./checkpoint/{timestamp}/{args.experiment}_{RUN_ID}"
-    # os.makedirs(expdir)
-    # experimentdir = f"{expdir}/code"
-
-    # if os.path.exists(experimentdir):
-    #     print(experimentdir + ' : exists. overwrite it.')
-    #     shutil.rmtree(experimentdir)
-    #     os.mkdir(experimentdir)
-    # else:
-    #     os.mkdir(experimentdir)
-    # pathname = "./*.py"
-    # files = glob.glob(pathname, recursive=True)
-
-    # for file in files:
-    #     dest_fpath = os.path.join(experimentdir, file.split("/")[-1])
-    #     try:
-    #         shutil.copy(file, dest_fpath)
-    #     except IOError as io_err:
-    #         os.makedirs(os.path.dirname(dest_fpath))
-    #         shutil.copy(file, dest_fpath)
 
     pathname = "./*.py"
     files = glob.glob(pathname, recursive=True)
@@ -279,18 +250,6 @@ def main():
         logger.info('%d \t %.1f \t \t %.4f \t %.4f \t %.4f',
             epoch, epoch_time - start_epoch_time, lr, train_loss/train_n, train_acc/train_n)
 
-        # pgd_loss, pgd_acc = evaluate_pgd(val_loader, model, 50, 1, opt=opt)
-        # test_loss, test_acc = evaluate_standard(val_loader, model)
-
-        # metrics = {"epoch":epoch}
-        # metrics["training_loss"] = train_loss/train_n
-        # metrics["training_acc"] = train_acc/train_n
-        # metrics["val_standard_acc"] = test_acc
-        # metrics["val_standard_loss"] = test_loss
-        # metrics["val_pgd_acc"] = pgd_acc
-        # metrics["val_pgd_loss"] = pgd_loss
-
-        # wandb.log(metrics, step=GLOBAL_STEP)
 
 
         model.eval()
@@ -309,23 +268,6 @@ def main():
     torch.save(model.state_dict(), os.path.join(args.out_dir, 'model.pth'))
     logger.info('Total train time: %.4f minutes', (train_time - start_train_time)/60)
 
-    # # Final Evaluation (record with wandb)
-    # model_test = PreActResNet18().cuda()
-    # model_test.load_state_dict(model.state_dict())
-    # model_test.float()
-    # model_test.eval()
-
-    # pgd_loss, pgd_acc = evaluate_pgd_2(test_loader, model_test, 50, 10)
-    # test_loss, test_acc = evaluate_standard(test_loader, model_test)
-
-    # logger.info('Test Loss \t Test Acc \t PGD Loss \t PGD Acc')
-    # logger.info('%.4f \t \t %.4f \t %.4f \t %.4f', test_loss, test_acc, pgd_loss, pgd_acc)
-
-    # wandb.run.summary["test_pgd_loss"] = pgd_loss
-    # wandb.run.summary["test_pgd_acc"] = pgd_acc
-    # wandb.run.summary["test_test_loss"] = test_loss
-    # wandb.run.summary["test_test_acc"] = test_acc
-
     # Final Evaluation (record with tensorboard)
     model_test = PreActResNet18().cuda() ### to make sure that the robustness evaluation is done on single precision instead of half-precision
     model_test.load_state_dict(best_state_dict)
@@ -341,55 +283,6 @@ def main():
 
     logger.info('Training Time Consuming ')
 
-# def evaluate_pgd(test_loader, model, attack_iters, restarts, opt=None):
-#     epsilon = (16 / 255.) / std
-#     alpha = (4 / 255.) / std
-#     pgd_loss = 0
-#     pgd_acc = 0
-#     n = 0
-#     model.eval()
-#     for i, (X, y) in enumerate(test_loader):
-#         X, y = X.cuda(), y.cuda()
-#         pgd_delta = attack_pgd(model, X, y, epsilon, alpha, attack_iters, restarts, opt=opt)
-#         with torch.no_grad():
-#             output = model(X + pgd_delta)
-#             loss = F.cross_entropy(output, y)
-#             pgd_loss += loss.item() * y.size(0)
-#             pgd_acc += (output.max(1)[1] == y).sum().item()
-#             n += y.size(0)
-#     return pgd_loss/n, pgd_acc/n
-
-# def attack_pgd(model, X, y, epsilon, alpha, attack_iters, restarts, opt=None):
-#     max_loss = torch.zeros(y.shape[0]).cuda()
-#     max_delta = torch.zeros_like(X).cuda()
-#     for zz in range(restarts):
-#         delta = torch.zeros_like(X).cuda()
-#         for i in range(len(epsilon)):
-#             delta[:, i, :, :].uniform_(-epsilon[i][0][0].item(), epsilon[i][0][0].item())
-#         delta.data = clamp(delta, lower_limit - X, upper_limit - X)
-#         delta.requires_grad = True
-#         for _ in range(attack_iters):
-#             output = model(X + delta)
-#             index = torch.where(output.max(1)[1] == y)
-#             if len(index[0]) == 0:
-#                 break
-#             loss = F.cross_entropy(output, y)
-#             if opt is not None:
-#                 with amp.scale_loss(loss, opt) as scaled_loss:
-#                     scaled_loss.backward()
-#             else:
-#                 loss.backward()
-#             grad = delta.grad.detach()
-#             d = delta[index[0], :, :, :]
-#             g = grad[index[0], :, :, :]
-#             d = clamp(d + alpha * torch.sign(g), -epsilon, epsilon)
-#             d = clamp(d, lower_limit - X[index[0], :, :, :], upper_limit - X[index[0], :, :, :])
-#             delta.data[index[0], :, :, :] = d
-#             delta.grad.zero_()
-#         all_loss = F.cross_entropy(model(X+delta), y, reduction='none').detach()
-#         max_delta[all_loss >= max_loss] = delta.detach()[all_loss >= max_loss]
-#         max_loss = torch.max(max_loss, all_loss)
-#     return max_delta
 
 if __name__ == "__main__":
     main()

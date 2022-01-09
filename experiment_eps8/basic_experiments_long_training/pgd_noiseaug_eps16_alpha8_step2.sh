@@ -1,18 +1,18 @@
-for i in 0 2
-do
 python train_pgd_NoiseAug.py --batch-size 128 \
     --data-dir /dev/shm \
-    --epochs 30 \
-    --lr-schedule cyclic \
+    --epochs 100 \
+    --lr-schedule multistep \
     --lr-min 0. \
     --lr-max 0.3 \
     --weight-decay 5e-4 \
     --epsilon 16 \
-    --alpha 3.2 \
-    --attack-iters 10 \
-    --delta-init random \
+    --alpha 8 \
+    --attack-iters 2 \
+    --delta-init zero \
     --out-dir PGD_baseline \
-    --seed $i \
+    --seed 0 \
+    --noise_aug \
+    --noise_aug_type uniform \
+    --noise_aug_size 2 \
     --image_normalize
-done
 

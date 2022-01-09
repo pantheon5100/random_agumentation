@@ -1,5 +1,3 @@
-for i in 0 2
-do
 python train_pgd_NoiseAug.py --batch-size 128 \
     --data-dir /dev/shm \
     --epochs 30 \
@@ -12,7 +10,6 @@ python train_pgd_NoiseAug.py --batch-size 128 \
     --attack-iters 10 \
     --delta-init random \
     --out-dir PGD_baseline \
-    --seed $i \
+    --seed 1 \
     --image_normalize
-done
 
