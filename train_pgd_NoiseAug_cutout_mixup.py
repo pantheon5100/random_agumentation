@@ -10,17 +10,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from preact_resnet import PreActResNet18
-from utils import (clamp, get_loaders, evaluate_standard, evaluate_pgd)
+from utils_cutout_mixup import (clamp, get_loaders, evaluate_standard, evaluate_pgd)
 
 import shutil
 import glob
-
-
+from torch.autograd import Variable
 
 logger = logging.getLogger(__name__)
 
 from torch.utils.tensorboard import SummaryWriter
-import shutil
 from datetime import datetime
 
 def get_args():
@@ -59,9 +57,31 @@ def get_args():
     # whether normalize image
     parser.add_argument('--image_normalize', action='store_true')
     parser.add_argument('--zero_one_clamp', default=1, type=int)
+
+    parser.add_argument('--cutout', action='store_true')
+    parser.add_argument('--cutout-len', type=int)
+    parser.add_argument('--mixup', action='store_true')
+    parser.add_argument('--mixup-alpha', type=float)
     
     return parser.parse_args()
 
+
+def mixup_data(x, y, alpha=1.0):
+    '''Returns mixed inputs, pairs of targets, and lambda'''
+    if alpha > 0:
+        lam = np.random.beta(alpha, alpha)
+    else:
+        lam = 1
+
+    batch_size = x.size()[0]
+    index = torch.randperm(batch_size).cuda()
+
+    mixed_x = lam * x + (1 - lam) * x[index, :]
+    y_a, y_b = y, y[index]
+    return mixed_x, y_a, y_b, lam
+
+def mixup_criterion(criterion, pred, y_a, y_b, lam):
+    return lam * criterion(pred, y_a) + (1 - lam) * criterion(pred, y_b)
 
 def main():
     args = get_args()
@@ -86,6 +106,13 @@ def main():
     # args.experiment = args.out_dir
     if args.noise_aug:
         args.out_dir = args.out_dir + f"-NoiseAug-_type_{args.noise_aug_type}-noise_aug_size_{args.noise_aug_size}-"
+    
+    # add args for mixup and cutout
+    if args.cutout:
+        args.out_dir = args.out_dir + f"-cutout-cutout_len_{args.cutout_len}-"
+    if args.mixup:
+        args.out_dir = args.out_dir + f"-mixup-mixup_len_{args.mixup_alpha}-"
+
     args.out_dir = args.out_dir + f"-epochs_{args.epochs}-lr_schedule_{args.lr_schedule}-lr_max_{args.lr_max}-epsilon_{args.epsilon}-attack_steps_{args.attack_iters}-alpha_{args.alpha}-delta_init_{args.delta_init}-zero_one_clamp_{args.zero_one_clamp}-seed_{args.seed}"
 
     args.experiment_name = args.out_dir
@@ -137,8 +164,7 @@ def main():
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed(args.seed)
 
-    # train_loader, test_loader, val_loader = get_loaders(args.data_dir, args.batch_size)
-    train_loader, test_loader, val_loader = get_loaders(args.data_dir, args.batch_size, args.image_normalize, cifar10_mean, cifar10_std)
+    train_loader, test_loader, val_loader = get_loaders(args.data_dir, args.batch_size, args.image_normalize, cifar10_mean, cifar10_std, args.cutout, args.cutout_len)
 
     epsilon = (args.epsilon / 255.) / std
     alpha = (args.alpha / 255.) / std
@@ -177,9 +203,13 @@ def main():
         train_acc = 0
         train_n = 0
         model.train()
-        for i, (X, y) in enumerate(train_loader):
+        for i, batchs in enumerate(train_loader):
             GLOBAL_STEP += 1
-            X, y = X.cuda(), y.cuda()
+            X, y = batchs['input'], batchs['target']
+
+            if args.mixup:
+                X, y_a, y_b, lam = mixup_data(X, y, args.mixup_alpha)
+                X, y_a, y_b = map(Variable, (X, y_a, y_b))
 
             if args.noise_aug:
                 noise = torch.zeros_like(X).cuda()
@@ -201,9 +231,14 @@ def main():
                 delta.data = clamp(delta, lower_limit - X, upper_limit - X)
             delta.requires_grad = True
 
-            for att_iter_num in range(args.attack_iters):
+            for _ in range(args.attack_iters):
                 output = model(X + delta)
-                loss = criterion(output, y)
+
+                if args.mixup:
+                    criterion = nn.CrossEntropyLoss()
+                    loss = mixup_criterion(criterion, model(X+delta), y_a, y_b, lam)
+                else:
+                    loss = F.cross_entropy(output, y)
                 with amp.scale_loss(loss, opt) as scaled_loss:
                     scaled_loss.backward()
                 grad = delta.grad.detach()
@@ -211,7 +246,6 @@ def main():
                 # remain clamp Baseline
                 delta.data = clamp(delta + alpha * torch.sign(grad), -epsilon, epsilon)
                 if args.zero_one_clamp:
-                    # import pdb; pdb.set_trace()
                     delta.data = clamp(delta, lower_limit - X, upper_limit - X)
 
                 # remove clamp
@@ -231,17 +265,19 @@ def main():
             train_n += y.size(0)
             scheduler.step()
 
-        if args.early_stop:
-            # Check current PGD robustness of model using random minibatch
-            X, y = first_batch
-            pgd_delta = attack_pgd(model, X, y, epsilon, pgd_alpha, 5, 1, lower_limit, upper_limit, opt)
-            with torch.no_grad():
-                output = model(clamp(X + pgd_delta[:X.size(0)], lower_limit, upper_limit))
-            robust_acc = (output.max(1)[1] == y).sum().item() / y.size(0)
-            if robust_acc - prev_robust_acc < -0.2:
-                break
-            prev_robust_acc = robust_acc
-            best_state_dict = copy.deepcopy(model.state_dict())
+        # if args.early_stop:
+        #     # Check current PGD robustness of model using random minibatch
+        #     X, y = first_batch
+        #     if args.mixup:
+        #             #pgd_delta = attack_pgd(model, X, y, epsilon, pgd_alpha, args.attack_iters, args.restarts, args.norm, mixup=True, y_a=y_a, y_b=y_b, lam=lam)
+        #         pgd_delta = attack_pgd(model, X, y, epsilon, pgd_alpha, 5, 1, lower_limit, upper_limit, opt)
+        #     with torch.no_grad():
+        #         output = model(clamp(X + pgd_delta[:X.size(0)], lower_limit, upper_limit))
+        #     robust_acc = (output.max(1)[1] == y).sum().item() / y.size(0)
+        #     if robust_acc - prev_robust_acc < -0.2:
+        #         break
+        #     prev_robust_acc = robust_acc
+        #     best_state_dict = copy.deepcopy(model.state_dict())
 
 
         epoch_time = time.time()

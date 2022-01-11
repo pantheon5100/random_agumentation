@@ -175,3 +175,6 @@ def evaluate_auto(test_loader, model, epsilon, logger=None):
                 logger.info('batch id: %d, autoattack accuracy: %f', i, auto_acc/n)
 
     return auto_loss/n, auto_acc/n
+
+
+

@@ -54,6 +54,10 @@ def get_args():
     parser.add_argument('--noise_aug_type', default='normal', type=str, help='Change noise augmentation type.')
     parser.add_argument('--noise_aug_size', default=1, type=float, help='Change noise augmenttion  size.')
 
+    parser.add_argument('--noise_aug_size_step1', default=0, type=float, help='Change noise augmenttion  size.')
+    parser.add_argument('--noise_aug_size_step2', default=0, type=float, help='Change noise augmenttion  size.')
+
+
     parser.add_argument('--early-stop', action='store_true', help='Early stop if overfitting occurs')
 
     # whether normalize image
@@ -65,8 +69,6 @@ def get_args():
 
 def main():
     args = get_args()
-
-    saving_prefix = args.out_dir
 
     if args.image_normalize:
         args.out_dir = args.out_dir + f"-image_normalize-"
@@ -85,7 +87,7 @@ def main():
 
     # args.experiment = args.out_dir
     if args.noise_aug:
-        args.out_dir = args.out_dir + f"-NoiseAug-_type_{args.noise_aug_type}-noise_aug_size_{args.noise_aug_size}-"
+        args.out_dir = args.out_dir + f"-NoiseAug_step_exploration-_type_{args.noise_aug_type}-noise_aug_size_{args.noise_aug_size}-noise_aug_size_step1_{args.noise_aug_size_step1}-noise_aug_size_step2_{args.noise_aug_size_step2}-"
     args.out_dir = args.out_dir + f"-epochs_{args.epochs}-lr_schedule_{args.lr_schedule}-lr_max_{args.lr_max}-epsilon_{args.epsilon}-attack_steps_{args.attack_iters}-alpha_{args.alpha}-delta_init_{args.delta_init}-zero_one_clamp_{args.zero_one_clamp}-seed_{args.seed}"
 
     args.experiment_name = args.out_dir
@@ -93,7 +95,7 @@ def main():
     time_stamp = datetime.now().strftime("%Y%m%d%H%M%S")
     curretn_dir = os.getcwd().split("/")[-1]
 
-    args.out_dir = os.path.join(saving_prefix, args.out_dir, time_stamp)
+    args.out_dir = os.path.join(curretn_dir, args.out_dir, time_stamp)
 
     # create tensorboard summary wirter
     writer = SummaryWriter(comment=args.experiment_name)
@@ -202,6 +204,12 @@ def main():
             delta.requires_grad = True
 
             for att_iter_num in range(args.attack_iters):
+                if att_iter_num == 0:
+                    alpha = (args.noise_aug_size_step1 / 255.) / std
+                else:
+                    alpha = (args.noise_aug_size_step2 / 255.) / std
+
+
                 output = model(X + delta)
                 loss = criterion(output, y)
                 with amp.scale_loss(loss, opt) as scaled_loss:

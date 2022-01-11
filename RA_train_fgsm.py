@@ -97,7 +97,7 @@ def main():
     if args.out_align_method != "none":
         args.out_dir = args.out_dir + f"-out_align_method_{args.out_align_method}"
 
-    args.out_dir = args.out_dir + f"-epochs_{args.epochs}-lr_schedule_{args.lr_schedule}-lr_max_{args.lr_max}-epsilon_{args.epsilon}-alpha_{args.alpha}-delta_init_{args.delta_init}-seed_{args.seed}" + args.comment
+    args.out_dir = args.out_dir + f"-epochs_{args.epochs}-lr_schedule_{args.lr_schedule}-lr_max_{args.lr_max}-epsilon_{args.epsilon}-alpha_{args.alpha}-delta_init_{args.delta_init}-seed_{args.seed}-noise_{args.out_align_noise}" + args.comment
 
     args.experiment_name = args.out_dir
 

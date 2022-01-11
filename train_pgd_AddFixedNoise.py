@@ -15,6 +15,7 @@ from utils import (clamp, get_loaders, evaluate_standard, evaluate_pgd)
 import shutil
 import glob
 
+from torchvision import datasets, transforms
 
 
 logger = logging.getLogger(__name__)
@@ -59,14 +60,16 @@ def get_args():
     # whether normalize image
     parser.add_argument('--image_normalize', action='store_true')
     parser.add_argument('--zero_one_clamp', default=1, type=int)
+
+    # add noise before transform or after
+    parser.add_argument('--add_fixed_noise', default="after", choices=["after", "before"], type=str)
+
     
     return parser.parse_args()
 
 
 def main():
     args = get_args()
-
-    saving_prefix = args.out_dir
 
     if args.image_normalize:
         args.out_dir = args.out_dir + f"-image_normalize-"
@@ -83,6 +86,8 @@ def main():
     upper_limit = ((1 - mu)/ std)
     lower_limit = ((0 - mu)/ std)
 
+    args.out_dir = args.out_dir + f"-add_fixed_noise_position_{args.add_fixed_noise}"
+
     # args.experiment = args.out_dir
     if args.noise_aug:
         args.out_dir = args.out_dir + f"-NoiseAug-_type_{args.noise_aug_type}-noise_aug_size_{args.noise_aug_size}-"
@@ -93,7 +98,7 @@ def main():
     time_stamp = datetime.now().strftime("%Y%m%d%H%M%S")
     curretn_dir = os.getcwd().split("/")[-1]
 
-    args.out_dir = os.path.join(saving_prefix, args.out_dir, time_stamp)
+    args.out_dir = os.path.join(curretn_dir, args.out_dir, time_stamp)
 
     # create tensorboard summary wirter
     writer = SummaryWriter(comment=args.experiment_name)
@@ -138,7 +143,7 @@ def main():
     torch.cuda.manual_seed(args.seed)
 
     # train_loader, test_loader, val_loader = get_loaders(args.data_dir, args.batch_size)
-    train_loader, test_loader, val_loader = get_loaders(args.data_dir, args.batch_size, args.image_normalize, cifar10_mean, cifar10_std)
+    _, test_loader, val_loader = get_loaders(args.data_dir, args.batch_size, args.image_normalize, cifar10_mean, cifar10_std)
 
     epsilon = (args.epsilon / 255.) / std
     alpha = (args.alpha / 255.) / std
@@ -147,6 +152,63 @@ def main():
         test_alpha = (2 / 255.) / std
     else:
         test_alpha = (4 / 255.) / std
+
+
+    class CIFARaxi(datasets.CIFAR10):
+        def __init__(self, path, transforms, eps, train=True):
+            super().__init__(path, train, download=True)
+            self.transforms = transforms
+            self.n_images_per_class = 5
+            self.n_classes = 10
+
+            if args.add_fixed_noise == "before":
+                self.noise_generation = np.random.uniform(low=-32, high=32, size=(50000, 32, 32, 3))
+            if args.add_fixed_noise == "after":
+                self.noise_generation = torch.zeros(50000, 3, 32, 32 )
+                for j in range(len(eps)):
+                    self.noise_generation[:, j, :, :].uniform_(-2*eps[j][0][0].item(), 2*eps[j][0][0].item())
+
+        def __getitem__(self, index):
+            im, label = super().__getitem__(index)
+            # add before transform
+            if args.add_fixed_noise == "before":
+                im = im + self.noise_generation[index]
+                im = self.transforms(im.astype(np.uint8)) 
+            # add after transform
+            if args.add_fixed_noise == "after":
+                im = self.transforms(im) 
+                im = im + self.noise_generation[index]
+
+            return im, label
+    
+    if args.add_fixed_noise == "before":
+
+        train_transform = transforms.Compose([
+            transforms.ToPILImage(),
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(cifar10_mean, cifar10_std),
+        ])
+    if args.add_fixed_noise == "after":
+        train_transform = transforms.Compose([
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(cifar10_mean, cifar10_std),
+        ])
+
+    train_dataset = CIFARaxi(
+        args.data_dir, train_transform, epsilon)
+
+    train_loader = torch.utils.data.DataLoader(
+        dataset=train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        pin_memory=True,
+        num_workers=2,
+    )
+
 
         
     model = PreActResNet18().cuda()
@@ -230,18 +292,6 @@ def main():
             train_acc += (output.max(1)[1] == y).sum().item()
             train_n += y.size(0)
             scheduler.step()
-
-        if args.early_stop:
-            # Check current PGD robustness of model using random minibatch
-            X, y = first_batch
-            pgd_delta = attack_pgd(model, X, y, epsilon, pgd_alpha, 5, 1, lower_limit, upper_limit, opt)
-            with torch.no_grad():
-                output = model(clamp(X + pgd_delta[:X.size(0)], lower_limit, upper_limit))
-            robust_acc = (output.max(1)[1] == y).sum().item() / y.size(0)
-            if robust_acc - prev_robust_acc < -0.2:
-                break
-            prev_robust_acc = robust_acc
-            best_state_dict = copy.deepcopy(model.state_dict())
 
 
         epoch_time = time.time()

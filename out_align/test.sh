@@ -1,0 +1,16 @@
+python RA_train_fgsm.py --batch-size 128 \
+        --data-dir /dev/shm \
+        --epochs 30 \
+        --lr-schedule cyclic \
+        --lr-min 0. \
+        --lr-max 0.3 \
+        --weight-decay 5e-4 \
+        --epsilon 16 \
+        --alpha 20 \
+        --delta-init random \
+        --seed 0 \
+        --out-dir "2nd_16/test_NAE2GT_1_norm" \
+        --out_align_method NAE2GT \
+        --out_align_noise 1 \
+        --image_normalize \
+        --comment fj_0110_17pm
