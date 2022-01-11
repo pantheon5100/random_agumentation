@@ -1,24 +1,21 @@
 import argparse
-import copy
 import logging
 import os
 import time
-import glob
-
 import setGPU
-
+import apex.amp as amp
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from apex import amp
-
-
-import torch.autograd as autograd
 
 from preact_resnet import PreActResNet18
-from utils import (clamp, get_loaders,
-    attack_pgd, evaluate_pgd, evaluate_standard)
+from utils import (clamp, get_loaders, evaluate_standard, evaluate_pgd)
+
+import shutil
+import glob
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -28,25 +25,29 @@ from datetime import datetime
 
 def get_args():
     parser = argparse.ArgumentParser()
+    # parser.add_argument('experiment', type=str)
     parser.add_argument('--batch-size', default=128, type=int)
-    parser.add_argument('--data-dir', default='../../cifar-data', type=str)
+    parser.add_argument('--data-dir', default='/dev/shm', type=str)
     parser.add_argument('--epochs', default=15, type=int)
-    parser.add_argument('--lr-schedule', default='cyclic', choices=['cyclic', 'multistep'])
+    parser.add_argument('--lr-schedule', default='cyclic', type=str, choices=['cyclic', 'multistep'])
     parser.add_argument('--lr-min', default=0., type=float)
     parser.add_argument('--lr-max', default=0.2, type=float)
     parser.add_argument('--weight-decay', default=5e-4, type=float)
     parser.add_argument('--momentum', default=0.9, type=float)
     parser.add_argument('--epsilon', default=8, type=int)
-    parser.add_argument('--alpha', default=10, type=float, help='Step size')
-    parser.add_argument('--delta-init', default='random', choices=['zero', 'random', 'previous'],
+    parser.add_argument('--attack-iters', default=7, type=int, help='Attack iterations')
+    parser.add_argument('--restarts', default=1, type=int)
+    parser.add_argument('--alpha', default=2, type=float, help='Step size')
+    parser.add_argument('--delta-init', default='random', choices=['zero', 'random'],
         help='Perturbation initialization method')
-    parser.add_argument('--out-dir', default='train_fgsm_output', type=str, help='Output directory')
+    parser.add_argument('--out-dir', default='train_pgd_output', type=str, help='Output directory')
     parser.add_argument('--seed', default=0, type=int, help='Random seed')
-    parser.add_argument('--early-stop', action='store_true', help='Early stop if overfitting occurs')
     parser.add_argument('--opt-level', default='O2', type=str, choices=['O0', 'O1', 'O2'],
         help='O0 is FP32 training, O1 is Mixed Precision, and O2 is "Almost FP16" Mixed Precision')
     parser.add_argument('--loss-scale', default='1.0', type=str, choices=['1.0', 'dynamic'],
         help='If loss_scale is "dynamic", adaptively adjust the loss scale over time')
+    parser.add_argument('--master-weights', action='store_true',
+        help='Maintain FP32 master weights to accompany any FP16 model weights, not applicable for O1 opt level')
 
     # when we use noise agumentation, removing delta initialization yields better performance
     parser.add_argument('--noise_aug', action='store_true')
@@ -60,18 +61,18 @@ def get_args():
     OUTPUT_ALIGN = ["none", "CS_AE_NAE", "KL_AE_NAE", "NAE2GT"]
     parser.add_argument('--out_align_method', default='none', type=str, choices=OUTPUT_ALIGN, help='Change random agumentation type.')
     parser.add_argument('--out_align_noise', default=2., type=float)
-    
+
     # whether normalize image
     parser.add_argument('--image_normalize', action='store_true')
-
-    parser.add_argument('--master-weights', action='store_true',
-        help='Maintain FP32 master weights to accompany any FP16 model weights, not applicable for O1 opt level')
+    parser.add_argument('--zero_one_clamp', default=1, type=int)
+    
     return parser.parse_args()
 
 
 def main():
     args = get_args()
 
+    saving_prefix = args.out_dir
     if args.image_normalize:
         args.out_dir = args.out_dir + f"-image_normalize-"
         cifar10_mean = (0.4914, 0.4822, 0.4465)
@@ -87,23 +88,51 @@ def main():
     upper_limit = ((1 - mu)/ std)
     lower_limit = ((0 - mu)/ std)
 
-
-    if args.random_augmentation:
+    # args.experiment = args.out_dir
+    if args.noise_aug:
+        assert (args.out_align_method == "none") and (args.grad_align_cos_lambda == 0.0)
         args.out_dir = args.out_dir + f"-NoiseAug-_type_{args.noise_aug_type}-noise_aug_size_{args.noise_aug_size}-"
     if args.grad_align_cos_lambda != 0.0:
+        assert (args.out_align_method == "none") and (args.noise_aug == False)
         args.out_dir = args.out_dir + f"-grad_align_cos_lambda_{args.grad_align_cos_lambda}-"
     if args.out_align_method != "none":
+        assert (args.grad_align_cos_lambda == 0.0) and (args.noise_aug == False)
         args.out_dir = args.out_dir + f"-out_align_method_{args.out_align_method}"
 
-    args.out_dir = args.out_dir + f"-epochs_{args.epochs}-lr_schedule_{args.lr_schedule}-lr_max_{args.lr_max}-epsilon_{args.epsilon}-alpha_{args.alpha}-delta_init_{args.delta_init}-seed_{args.seed}"
+    args.out_dir = args.out_dir + f"-epochs_{args.epochs}-lr_schedule_{args.lr_schedule}-lr_max_{args.lr_max}-epsilon_{args.epsilon}-attack_steps_{args.attack_iters}-alpha_{args.alpha}-delta_init_{args.delta_init}-zero_one_clamp_{args.zero_one_clamp}-seed_{args.seed}"
 
     args.experiment_name = args.out_dir
 
-    time_stamp = datetime.now().strftime("%Y%m%d")
-    args.out_dir = os.path.join("experiment_log", args.out_dir, time_stamp)
+    time_stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    args.out_dir = os.path.join(saving_prefix, args.out_dir, time_stamp)
 
+    # create tensorboard summary wirter
+    writer = SummaryWriter(comment=args.experiment_name)
+
+
+    ################################################################
+    # training code saving
+    ################################################################
+
+    pathname = "./*.py"
+    files = glob.glob(pathname, recursive=True)
+
+    for file in files:
+        dest_fpath = os.path.join("./log_files", args.out_dir, "code", file.split("/")[-1])
+        try:
+            shutil.copy(file, dest_fpath)
+        except IOError as io_err:
+            os.makedirs(os.path.dirname(dest_fpath))
+            shutil.copy(file, dest_fpath)
+
+    ################################################################
+    # training code saving
+    ################################################################
+
+    args.out_dir = os.path.join("./log_files", args.out_dir) 
     if not os.path.exists(args.out_dir):
         os.makedirs(args.out_dir)
+    
     logfile = os.path.join(args.out_dir, 'output.log')
     if os.path.exists(logfile):
         os.remove(logfile)
@@ -112,24 +141,10 @@ def main():
         format='[%(asctime)s] - %(message)s',
         datefmt='%Y/%m/%d %H:%M:%S',
         level=logging.INFO,
-        filename=os.path.join(args.out_dir, 'output.log'))
+        filename=logfile)
     logger.info(args)
 
-    # coding saving
-    pathname = "./*.py"
-    files = glob.glob(pathname, recursive=True)
-
-    for file in files:
-        dest_fpath = os.path.join(args.out_dir, "code", file.split("/")[-1])
-        try:
-            shutil.copy(file, dest_fpath)
-        except IOError as io_err:
-            os.makedirs(os.path.dirname(dest_fpath))
-            shutil.copy(file, dest_fpath)
-
-    # create tensorboard summary wirter
-    writer = SummaryWriter(comment=args.experiment_name)
-
+    # random seed setting
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed(args.seed)
@@ -138,12 +153,13 @@ def main():
 
     epsilon = (args.epsilon / 255.) / std
     alpha = (args.alpha / 255.) / std
-    pgd_alpha = (2 / 255.) / std
+
     if args.epsilon == 8:
         test_alpha = (2 / 255.) / std
     else:
         test_alpha = (4 / 255.) / std
 
+        
     model = PreActResNet18().cuda()
     model.train()
 
@@ -154,9 +170,6 @@ def main():
     model, opt = amp.initialize(model, opt, **amp_args)
     criterion = nn.CrossEntropyLoss()
 
-    if args.delta_init == 'previous':
-        delta = torch.zeros(args.batch_size, 3, 32, 32).cuda()
-
     lr_steps = args.epochs * len(train_loader)
     if args.lr_schedule == 'cyclic':
         scheduler = torch.optim.lr_scheduler.CyclicLR(opt, base_lr=args.lr_min, max_lr=args.lr_max,
@@ -165,49 +178,59 @@ def main():
         scheduler = torch.optim.lr_scheduler.MultiStepLR(opt, milestones=[lr_steps / 2, lr_steps * 3 / 4], gamma=0.1)
 
     # Training
-    prev_robust_acc = 0.
     start_train_time = time.time()
     logger.info('Epoch \t Seconds \t LR \t \t Train Loss \t Train Acc')
     training_time_accumelater = 0
     for epoch in range(args.epochs):
+        print(f"Epoch: {epoch}")
         start_epoch_time = time.time()
         train_loss = 0
         train_acc = 0
         train_n = 0
+        model.train()
         for i, (X, y) in enumerate(train_loader):
             X, y = X.cuda(), y.cuda()
 
             if args.noise_aug:
                 noise = torch.zeros_like(X).cuda()
                 if args.noise_aug_type == "uniform":
-                    for j in range(len(epsilon)):
-                        noise[:, j, :, :].uniform_(-args.noise_aug_size * epsilon[j][0][0].item(), args.noise_aug_size*epsilon[j][0][0].item())
+                    noise.uniform_(-1, 1) 
                 elif args.noise_aug_type == "normal":
                     noise = torch.randn(X.shape).cuda()
-                    for j in range(len(epsilon)):
-                        noise[:, j, :, :] = args.noise_aug_size*epsilon[j][0][0].item() * noise[:, j, :, :]
-                    # noise = (args.noise_aug_size*args.epsilon*noise)/255
-                noise.data = clamp(noise, lower_limit - X, upper_limit - X)
+                for j in range(len(epsilon)):
+                    noise[:, j, :, :] = args.noise_aug_size*epsilon[j][0][0].item() * noise[:, j, :, :]
+                if args.zero_one_clamp:
+                    noise.data = clamp(noise, lower_limit - X, upper_limit - X)
                 X = X + noise
 
-            if i == 0:
-                first_batch = (X, y)
-            if args.delta_init != 'previous':
-                delta = torch.zeros_like(X).cuda()
+
+            delta = torch.zeros_like(X).cuda()
             if args.delta_init == 'random':
-                for j in range(len(epsilon)):
-                    delta[:, j, :, :].uniform_(-epsilon[j][0][0].item(), epsilon[j][0][0].item())
+                for i in range(len(epsilon)):
+                    delta[:, i, :, :].uniform_(-epsilon[i][0][0].item(), epsilon[i][0][0].item())
                 delta.data = clamp(delta, lower_limit - X, upper_limit - X)
             delta.requires_grad = True
+
+            # for att_iter_num in range(args.attack_iters):
+            # Only used for FGSM Training
             output = model(X + delta[:X.size(0)])
-            loss = F.cross_entropy(output, y)
+            loss = criterion(output, y)
             with amp.scale_loss(loss, opt) as scaled_loss:
                 scaled_loss.backward()
             grad = delta.grad.detach()
+
+            # remain clamp Baseline
             delta.data = clamp(delta + alpha * torch.sign(grad), -epsilon, epsilon)
-            delta.data[:X.size(0)] = clamp(delta[:X.size(0)], lower_limit - X, upper_limit - X)
+            if args.zero_one_clamp:
+                # import pdb; pdb.set_trace()
+                delta.data = clamp(delta, lower_limit - X, upper_limit - X)
+            # remove clamp
+            # delta.data = delta + alpha * torch.sign(grad)
+            delta.grad.zero_()
+            
+            
             delta = delta.detach()
-            output = model(X + delta[:X.size(0)])
+            output = model(X + delta)
             loss = criterion(output, y)
 
             # # add grad align method
@@ -223,7 +246,7 @@ def main():
                 reg += args.grad_align_cos_lambda * (1.0 - cos.mean())
 
             loss += reg
-
+            
             # add output align method
             if args.out_align_method != "none":
                 loss_out_align = output_align(X, y, output, epsilon, alpha, model, lower_limit, upper_limit, align_method=args.out_align_method, opt=opt, out_align_noise=args.out_align_noise)
@@ -237,17 +260,9 @@ def main():
             train_acc += (output.max(1)[1] == y).sum().item()
             train_n += y.size(0)
             scheduler.step()
-        if args.early_stop:
-            # Check current PGD robustness of model using random minibatch
-            X, y = first_batch
-            pgd_delta = attack_pgd(model, X, y, epsilon, pgd_alpha, 5, 1, lower_limit, upper_limit, opt)
-            with torch.no_grad():
-                output = model(clamp(X + pgd_delta[:X.size(0)], lower_limit, upper_limit))
-            robust_acc = (output.max(1)[1] == y).sum().item() / y.size(0)
-            if robust_acc - prev_robust_acc < -0.2:
-                break
-            prev_robust_acc = robust_acc
-            best_state_dict = copy.deepcopy(model.state_dict())
+
+
+
         epoch_time = time.time()
         lr = scheduler.get_lr()[0]
         logger.info('%d \t %.1f \t \t %.4f \t %.4f \t %.4f',
@@ -265,25 +280,24 @@ def main():
         writer.add_scalar("test_acc", test_acc, epoch)
 
     train_time = time.time()
-    if not args.early_stop:
-        best_state_dict = model.state_dict()
-    torch.save(best_state_dict, os.path.join(args.out_dir, 'model.pth'))
+
+    torch.save(model.state_dict(), os.path.join(args.out_dir, 'model.pth'))
     logger.info('Total train time: %.4f minutes', (train_time - start_train_time)/60)
 
-    # Evaluation
-    model_test = PreActResNet18().cuda()
-    model_test.load_state_dict(best_state_dict)
+    # Final Evaluation (record with tensorboard)
+    model_test = PreActResNet18().cuda() ### to make sure that the robustness evaluation is done on single precision instead of half-precision
+    model_test.load_state_dict(model.state_dict())
     model_test.float()
     model_test.eval()
 
-    pgd_loss, pgd_acc = evaluate_pgd(test_loader, model_test, 50, 10, epsilon, test_alpha, lower_limit, upper_limit, logger=logger)
+    pgd_loss, pgd_acc = evaluate_pgd(test_loader, model_test, 50, 10, epsilon, test_alpha, lower_limit, upper_limit, opt=None, logger=logger)
     test_loss, test_acc = evaluate_standard(test_loader, model_test)
 
 
     logger.info('Test Loss \t Test Acc \t PGD Loss \t PGD Acc')
     logger.info('%.4f \t \t %.4f \t %.4f \t %.4f', test_loss, test_acc, pgd_loss, pgd_acc)
 
-    logger.info('Training Time Consuming ')
+    logger.info(f'Training Time Consuming:{training_time_accumelater}')
 
 
 # function for grad align
