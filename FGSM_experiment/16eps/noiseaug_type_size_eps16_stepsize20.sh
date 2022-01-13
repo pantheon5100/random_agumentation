@@ -1,0 +1,2 @@
+sh FGSM_experiment/16eps/noiseaug_type_size_eps16_stepsize20_seed2.sh &
+sh FGSM_experiment/16eps/noiseaug_type_size_eps16_stepsize20_seed1.sh
