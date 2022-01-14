@@ -15,6 +15,7 @@ from utils import (clamp, get_loaders, evaluate_standard, evaluate_pgd)
 import shutil
 import glob
 
+from sys import exit
 
 
 logger = logging.getLogger(__name__)
@@ -222,7 +223,8 @@ def main():
             grad = delta.grad.detach()
 
             # remain clamp Baseline
-            delta.data = clamp(delta + alpha * torch.sign(grad), -epsilon, epsilon)
+            # delta.data = clamp(delta + alpha * torch.sign(grad), -epsilon, epsilon)
+            delta.data = delta + alpha * torch.sign(grad)
             if args.zero_one_clamp:
                 # import pdb; pdb.set_trace()
                 delta.data = clamp(delta, lower_limit - X, upper_limit - X)
@@ -281,8 +283,11 @@ def main():
         writer.add_scalar("test_loss", test_loss, epoch)
         writer.add_scalar("test_acc", test_acc, epoch)
 
-    train_time = time.time()
+        if pgd_acc < 0.01:
+            logger.info(f"Catastrophic happens at epoch {epoch}. Stop Training.")
+            exit(0)
 
+    train_time = time.time()
     torch.save(model.state_dict(), os.path.join(args.out_dir, 'model.pth'))
     logger.info('Total train time: %.4f minutes', (train_time - start_train_time)/60)
 

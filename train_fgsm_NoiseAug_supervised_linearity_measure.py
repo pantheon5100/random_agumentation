@@ -66,7 +66,6 @@ def get_args():
     parser.add_argument('--image_normalize', action='store_true')
     parser.add_argument('--zero_one_clamp', default=1, type=int)
     
-
     return parser.parse_args()
 
 
@@ -74,7 +73,7 @@ def main():
     args = get_args()
 
     saving_prefix = args.out_dir
-
+    
     if args.image_normalize:
         args.out_dir = args.out_dir + f"-image_normalize-"
         cifar10_mean = (0.4914, 0.4822, 0.4465)
@@ -109,7 +108,7 @@ def main():
     args.out_dir = os.path.join(saving_prefix, args.out_dir, time_stamp)
 
     # create tensorboard summary wirter
-    writer = SummaryWriter(comment=args.experiment_name)
+    writer = SummaryWriter(log_dir="supervised_training/"+args.experiment_name)
 
 
     ################################################################
@@ -161,7 +160,7 @@ def main():
     else:
         test_alpha = (4 / 255.) / std
 
-
+        
     model = PreActResNet18().cuda()
     model.train()
 
@@ -207,52 +206,36 @@ def main():
 
 
             delta = torch.zeros_like(X).cuda()
-            if args.delta_init == 'random':
-                for i in range(len(epsilon)):
-                    delta[:, i, :, :].uniform_(-epsilon[i][0][0].item(), epsilon[i][0][0].item())
-                delta.data = clamp(delta, lower_limit - X, upper_limit - X)
-            delta.requires_grad = True
+            # if args.delta_init == 'random':
+            #     for i in range(len(epsilon)):
+            #         delta[:, i, :, :].uniform_(-epsilon[i][0][0].item(), epsilon[i][0][0].item())
+            #     delta.data = clamp(delta, lower_limit - X, upper_limit - X)
+            # delta.requires_grad = True
 
-            # for att_iter_num in range(args.attack_iters):
-            # Only used for FGSM Training
-            output = model(X + delta[:X.size(0)])
-            loss = criterion(output, y)
-            with amp.scale_loss(loss, opt) as scaled_loss:
-                scaled_loss.backward()
-            grad = delta.grad.detach()
+            # # for att_iter_num in range(args.attack_iters):
+            # # Only used for FGSM Training
+            # output = model(X + delta[:X.size(0)])
+            # loss = criterion(output, y)
+            # with amp.scale_loss(loss, opt) as scaled_loss:
+            #     scaled_loss.backward()
+            # grad = delta.grad.detach()
 
-            # remain clamp Baseline
-            delta.data = clamp(delta + alpha * torch.sign(grad), -epsilon, epsilon)
-            if args.zero_one_clamp:
-                # import pdb; pdb.set_trace()
-                delta.data = clamp(delta, lower_limit - X, upper_limit - X)
+            # # remain clamp Baseline
+            # delta.data = clamp(delta + alpha * torch.sign(grad), -epsilon, epsilon)
+            # if args.zero_one_clamp:
+            #     # import pdb; pdb.set_trace()
+            #     delta.data = clamp(delta, lower_limit - X, upper_limit - X)
 
             # remove clamp
             # delta.data = delta + alpha * torch.sign(grad)
-            delta.grad.zero_()
+            # delta.grad.zero_()
 
-            delta = delta.detach()
-            output = model(X + delta)
+            # delta = delta.detach()
+            # output = model(X + delta)
+            output = model(X )
+
             loss = criterion(output, y)
 
-            # # add grad align method
-            reg = torch.zeros(1).cuda()[0]  # for .item() to run correctly
-            if args.grad_align_cos_lambda != 0.0:
-                grad2 = get_input_grad(model, X, y, opt, epsilon, True, delta_init='random_uniform', backprop=True)
-                grads_nnz_idx = ((grad**2).sum([1, 2, 3])**0.5 != 0) * ((grad2**2).sum([1, 2, 3])**0.5 != 0)
-                grad1, grad2 = grad[grads_nnz_idx], grad2[grads_nnz_idx]
-                grad1_norms, grad2_norms = l2_norm_batch(grad1), l2_norm_batch(grad2)
-                grad1_normalized = grad1 / grad1_norms[:, None, None, None]
-                grad2_normalized = grad2 / grad2_norms[:, None, None, None]
-                cos = torch.sum(grad1_normalized * grad2_normalized, (1, 2, 3))
-                reg += args.grad_align_cos_lambda * (1.0 - cos.mean())
-
-            loss += reg
-
-            # add output align method
-            if args.out_align_method != "none":
-                loss_out_align = output_align(X, y, output, epsilon, alpha, model, lower_limit, upper_limit, align_method=args.out_align_method, opt=opt, out_align_noise=args.out_align_noise)
-                loss += loss_out_align
 
             opt.zero_grad()
             with amp.scale_loss(loss, opt) as scaled_loss:
@@ -262,6 +245,25 @@ def main():
             train_acc += (output.max(1)[1] == y).sum().item()
             train_n += y.size(0)
             scheduler.step()
+
+        # # add grad align method
+        model.eval()
+
+        grad1 = get_input_grad(model, X, y, opt, epsilon, True, delta_init='none', backprop=False)
+        grad2 = get_input_grad(model, X, y, opt, epsilon, True, delta_init='random_uniform', backprop=False)
+        grad1, grad2 = grad1.reshape(len(grad1), -1), grad2.reshape(len(grad2), -1)
+        linearity_measure = torch.nn.functional.cosine_similarity(grad1, grad2, 1).mean()
+
+        # grad2 = get_input_grad(model, X, y, opt, epsilon, True, delta_init='random_uniform', backprop=True)
+        # grads_nnz_idx = ((grad**2).sum([1, 2, 3])**0.5 != 0) * ((grad2**2).sum([1, 2, 3])**0.5 != 0)
+        # grad1, grad2 = grad[grads_nnz_idx], grad2[grads_nnz_idx]
+        # grad1_norms, grad2_norms = l2_norm_batch(grad1), l2_norm_batch(grad2)
+        # grad1_normalized = grad1 / grad1_norms[:, None, None, None]
+        # grad2_normalized = grad2 / grad2_norms[:, None, None, None]
+        # cos = torch.sum(grad1_normalized * grad2_normalized, (1, 2, 3))
+        # linearity_measure = cos.mean()
+        model.train()
+
 
 
 
@@ -280,6 +282,8 @@ def main():
         writer.add_scalar("pgd_acc", pgd_acc, epoch)
         writer.add_scalar("test_loss", test_loss, epoch)
         writer.add_scalar("test_acc", test_acc, epoch)
+        writer.add_scalar("linearity_measure", linearity_measure, epoch)
+
 
     train_time = time.time()
 
@@ -307,7 +311,11 @@ def get_input_grad(model, X, y, opt, eps, half_prec, delta_init='none', backprop
     if delta_init == 'none':
         delta = torch.zeros_like(X, requires_grad=True)
     elif delta_init == 'random_uniform':
-        delta = get_uniform_delta(X.shape, eps, requires_grad=True)
+        # delta = get_uniform_delta(X.shape, eps, requires_grad=True)
+        delta = torch.zeros_like(X, requires_grad=True)
+        for j in range(len(eps)):
+            delta[:, j, :, :].uniform_(-eps[j][0][0].item(), eps[j][0][0].item())
+
     elif delta_init == 'random_corner':
         delta = get_uniform_delta(X.shape, eps, requires_grad=True)
         delta = eps * torch.sign(delta)

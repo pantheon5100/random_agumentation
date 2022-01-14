@@ -91,8 +91,6 @@ def main():
     args.experiment_name = args.out_dir
 
     time_stamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    curretn_dir = os.getcwd().split("/")[-1]
-
     args.out_dir = os.path.join(saving_prefix, args.out_dir, time_stamp)
 
     # create tensorboard summary wirter
@@ -133,11 +131,11 @@ def main():
         filename=logfile)
     logger.info(args)
 
+    # random seed setting
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed(args.seed)
 
-    # train_loader, test_loader, val_loader = get_loaders(args.data_dir, args.batch_size)
     train_loader, test_loader, val_loader = get_loaders(args.data_dir, args.batch_size, args.image_normalize, cifar10_mean, cifar10_std)
 
     epsilon = (args.epsilon / 255.) / std
@@ -169,16 +167,15 @@ def main():
     # Training
     start_train_time = time.time()
     logger.info('Epoch \t Seconds \t LR \t \t Train Loss \t Train Acc')
-    GLOBAL_STEP = 0
+    training_time_accumelater = 0
     for epoch in range(args.epochs):
-        print(epoch)
+        print(f"Epoch: {epoch}")
         start_epoch_time = time.time()
         train_loss = 0
         train_acc = 0
         train_n = 0
         model.train()
         for i, (X, y) in enumerate(train_loader):
-            GLOBAL_STEP += 1
             X, y = X.cuda(), y.cuda()
 
             if args.noise_aug:
@@ -216,9 +213,8 @@ def main():
 
                 # remove clamp
                 # delta.data = delta + alpha * torch.sign(grad)
-
-
                 delta.grad.zero_()
+                
             delta = delta.detach()
             output = model(X + delta)
             loss = criterion(output, y)
@@ -248,8 +244,7 @@ def main():
         lr = scheduler.get_lr()[0]
         logger.info('%d \t %.1f \t \t %.4f \t %.4f \t %.4f',
             epoch, epoch_time - start_epoch_time, lr, train_loss/train_n, train_acc/train_n)
-
-
+        training_time_accumelater += epoch_time - start_epoch_time
 
         model.eval()
         pgd_loss, pgd_acc = evaluate_pgd(val_loader, model, 50, 1, epsilon, test_alpha, lower_limit, upper_limit, opt=opt, logger=logger)
@@ -280,7 +275,8 @@ def main():
     logger.info('Test Loss \t Test Acc \t PGD Loss \t PGD Acc')
     logger.info('%.4f \t \t %.4f \t %.4f \t %.4f', test_loss, test_acc, pgd_loss, pgd_acc)
 
-    logger.info('Training Time Consuming ')
+    logger.info(f'Training Time Consuming:{training_time_accumelater}')
+
 
 
 if __name__ == "__main__":
