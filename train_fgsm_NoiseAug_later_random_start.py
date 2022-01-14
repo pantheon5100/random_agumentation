@@ -61,13 +61,13 @@ def get_args():
     OUTPUT_ALIGN = ["none", "CS_AE_NAE", "KL_AE_NAE", "NAE2GT"]
     parser.add_argument('--out_align_method', default='none', type=str, choices=OUTPUT_ALIGN, help='Change random agumentation type.')
     parser.add_argument('--out_align_noise', default=2., type=float)
-    parser.add_argument('--nae_to_gt_factor', default=0.0, type=float)
+    parser.add_argument('--nae_to_gt_factor', default=1., type=float)
 
 
     # whether normalize image
     parser.add_argument('--image_normalize', action='store_true')
     parser.add_argument('--zero_one_clamp', default=1, type=int)
-
+    
 
     return parser.parse_args()
 
@@ -105,7 +105,7 @@ def main():
         if args.out_align_method == "NAE2GT":
             args.out_dir = args.out_dir + f"nae_to_gt_factor_{args.nae_to_gt_factor}-"
         else:
-            assert args.nae_to_gt_factor == 0.0
+            assert args.nae_to_gt_factor == 1.0
 
     args.out_dir = args.out_dir + f"-epochs_{args.epochs}-lr_schedule_{args.lr_schedule}-lr_max_{args.lr_max}-epsilon_{args.epsilon}-attack_steps_{args.attack_iters}-alpha_{args.alpha}-delta_init_{args.delta_init}-zero_one_clamp_{args.zero_one_clamp}-seed_{args.seed}"
 
@@ -238,7 +238,14 @@ def main():
             delta.grad.zero_()
 
             delta = delta.detach()
-            output = model(X + delta)
+
+            # later random start
+            additional_delta = torch.zeros_like(X).cuda()
+            for i in range(len(epsilon)):
+                additional_delta[:, i, :, :].uniform_(-epsilon[i][0][0].item(), epsilon[i][0][0].item())
+            additional_delta.data = clamp(additional_delta, lower_limit - X, upper_limit - X)
+
+            output = model(X + delta + additional_delta)
             loss = criterion(output, y)
 
             # # add grad align method
@@ -257,11 +264,8 @@ def main():
 
             # add output align method
             if args.out_align_method != "none":
-                loss_out_align = output_align(X, y, output, epsilon, alpha, model, lower_limit, upper_limit, align_method=args.out_align_method, opt=opt, out_align_noise=args.out_align_noise)
-                if args.out_align_method == "NAE2GT":
-                    loss = (1 - args.nae_to_gt_factor) * loss + args.nae_to_gt_factor * loss_out_align
-                else:
-                    loss += loss_out_align
+                loss_out_align = output_align(X, y, output, epsilon, alpha, model, lower_limit, upper_limit, align_method=args.out_align_method, opt=opt, out_align_noise=args.out_align_noise, nae_to_gt_factor=args.nae_to_gt_factor)
+                loss += loss_out_align
 
             opt.zero_grad()
             with amp.scale_loss(loss, opt) as scaled_loss:
@@ -345,7 +349,7 @@ def l2_norm_batch(v):
 
 
 # function for output align experiment
-def output_align(X, y, adv_logit, epsilon, alpha, model, lower_limit, upper_limit, align_method, opt, out_align_noise):
+def output_align(X, y, adv_logit, epsilon, alpha, model, lower_limit, upper_limit, align_method, opt, out_align_noise, nae_to_gt_factor=1):
     # Generate X+noise adversarial example
     noise = torch.zeros_like(X).cuda()
     for j in range(len(epsilon)):
@@ -385,7 +389,7 @@ def output_align(X, y, adv_logit, epsilon, alpha, model, lower_limit, upper_limi
         output_noise = model(X + noise + delta_noise[:X.size(0)])
         loss = F.cross_entropy(output_noise, y)
 
-    return loss
+    return loss * nae_to_gt_factor
 
 if __name__ == "__main__":
     main()

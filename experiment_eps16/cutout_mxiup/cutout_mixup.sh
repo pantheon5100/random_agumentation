@@ -11,7 +11,7 @@ python train_pgd_NoiseAug_cutout_mixup.py --batch-size 128 \
     --alpha 16 \
     --attack-iters 1 \
     --delta-init random \
-    --out-dir Cutout_Mixup \
+    --out-dir Cutout_Mixup_FGSM \
     --seed $i \
     --image_normalize \
     --mixup \
