@@ -50,8 +50,10 @@ def get_loaders(dir_, batch_size, image_normalize, cifar10_mean, cifar10_std):
 
     val_dataset = datasets.CIFAR10(
         dir_, train=False, transform=test_transform, download=True)
-    val_dataset.data = val_dataset.data[:1000]
-    val_dataset.targets = val_dataset.targets[:1000]
+    val_dataset.data = val_dataset.data[::10]
+    val_dataset.targets = val_dataset.targets[::10]
+    # val_dataset.data = val_dataset.data[:1000]
+    # val_dataset.targets = val_dataset.targets[:1000]
 
     train_loader = torch.utils.data.DataLoader(
         dataset=train_dataset,

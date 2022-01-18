@@ -6,3 +6,5 @@ experiment_log/
 log_files/
 NoiseAug/
 supervised_training/
+*.pdf
+*.png

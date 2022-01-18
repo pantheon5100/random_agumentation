@@ -285,6 +285,7 @@ def main():
 
         if pgd_acc < 0.01:
             logger.info(f"Catastrophic happens at epoch {epoch}. Stop Training.")
+            torch.save(model.state_dict(), os.path.join(args.out_dir, 'model.pth'))
             exit(0)
 
     train_time = time.time()

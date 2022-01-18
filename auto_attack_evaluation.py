@@ -1,3 +1,5 @@
+from datetime import datetime
+from torch.utils.tensorboard import SummaryWriter
 import argparse
 import logging
 import os
@@ -10,13 +12,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 import wandb
 
-from preact_resnet import PreActResNet18
+# from preact_resnet import PreActResNet18
+from preact_resnet_with_norm import PreActResNet18
 from utils import (clamp, get_loaders, evaluate_standard, evaluate_pgd)
 
 import shutil
 import glob
 
-from types import int, str, float
+# from types import int, str, float
 
 
 # from alive_progress import alive_it
@@ -24,9 +27,6 @@ from types import int, str, float
 
 logger = logging.getLogger(__name__)
 
-from torch.utils.tensorboard import SummaryWriter
-import shutil
-from datetime import datetime
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -34,37 +34,44 @@ def get_args():
     parser.add_argument('--batch-size', default=128, type=int)
     parser.add_argument('--data-dir', default='/dev/shm', type=str)
     parser.add_argument('--epochs', default=15, type=int)
-    parser.add_argument('--lr-schedule', default='cyclic', type=str, choices=['cyclic', 'multistep'])
+    parser.add_argument('--lr-schedule', default='cyclic',
+                        type=str, choices=['cyclic', 'multistep'])
     parser.add_argument('--lr-min', default=0., type=float)
     parser.add_argument('--lr-max', default=0.2, type=float)
     parser.add_argument('--weight-decay', default=5e-4, type=float)
     parser.add_argument('--momentum', default=0.9, type=float)
     parser.add_argument('--epsilon', default=8, type=int)
-    parser.add_argument('--attack-iters', default=7, type=int, help='Attack iterations')
+    parser.add_argument('--attack-iters', default=7,
+                        type=int, help='Attack iterations')
     parser.add_argument('--restarts', default=1, type=int)
     parser.add_argument('--alpha', default=2, type=float, help='Step size')
     parser.add_argument('--delta-init', default='random', choices=['zero', 'random'],
-        help='Perturbation initialization method')
-    parser.add_argument('--out-dir', default='train_pgd_output', type=str, help='Output directory')
+                        help='Perturbation initialization method')
+    parser.add_argument('--out-dir', default='train_pgd_output',
+                        type=str, help='Output directory')
     parser.add_argument('--seed', default=0, type=int, help='Random seed')
     parser.add_argument('--opt-level', default='O2', type=str, choices=['O0', 'O1', 'O2'],
-        help='O0 is FP32 training, O1 is Mixed Precision, and O2 is "Almost FP16" Mixed Precision')
+                        help='O0 is FP32 training, O1 is Mixed Precision, and O2 is "Almost FP16" Mixed Precision')
     parser.add_argument('--loss-scale', default='1.0', type=str, choices=['1.0', 'dynamic'],
-        help='If loss_scale is "dynamic", adaptively adjust the loss scale over time')
+                        help='If loss_scale is "dynamic", adaptively adjust the loss scale over time')
     parser.add_argument('--master-weights', action='store_true',
-        help='Maintain FP32 master weights to accompany any FP16 model weights, not applicable for O1 opt level')
+                        help='Maintain FP32 master weights to accompany any FP16 model weights, not applicable for O1 opt level')
 
     # when we use noise agumentation, removing delta initialization yields better performance
     parser.add_argument('--noise_aug', action='store_true')
-    parser.add_argument('--noise_aug_type', default='normal', type=str, help='Change noise augmentation type.')
-    parser.add_argument('--noise_aug_size', default=1, type=float, help='Change noise augmenttion  size.')
+    parser.add_argument('--noise_aug_type', default='normal',
+                        type=str, help='Change noise augmentation type.')
+    parser.add_argument('--noise_aug_size', default=1,
+                        type=float, help='Change noise augmenttion  size.')
 
-    parser.add_argument('--early-stop', action='store_true', help='Early stop if overfitting occurs')
+    parser.add_argument('--early-stop', action='store_true',
+                        help='Early stop if overfitting occurs')
 
     # whether normalize image
     parser.add_argument('--image_normalize', action='store_true')
     parser.add_argument('--zero_one_clamp', default=1, type=int)
-    
+    parser.add_argument('--testing_file', default='', type=str)
+
     return parser.parse_args()
 
 
@@ -84,20 +91,24 @@ def main():
         cifar10_mean = (0., 0., 0.)
         cifar10_std = (1., 1., 1.)
 
-    mu = torch.tensor(cifar10_mean).view(3,1,1).cuda()
-    std = torch.tensor(cifar10_std).view(3,1,1).cuda()
+    mu = torch.tensor(cifar10_mean).view(3, 1, 1).cuda()
+    std = torch.tensor(cifar10_std).view(3, 1, 1).cuda()
 
     upper_limit = (1 - mu)
     lower_limit = (0 - mu)
 
     #testing_file = "log_files/NoiseAug/PGD_baseline-image_normalize--NoiseAug-_type_uniform-noise_aug_size_2.0--epochs_40-lr_schedule_cyclic-lr_max_0.2-epsilon_16-attack_steps_2-alpha_8.0-delta_init_zero-zero_one_clamp_0-seed_1/20220108145735/model.pth"
     #testing_file = "log_files/NoiseAug/PGD_baseline-image_normalize--NoiseAug-_type_uniform-noise_aug_size_2.0--epochs_30-lr_schedule_cyclic-lr_max_0.3-epsilon_16-attack_steps_2-alpha_8.0-delta_init_zero-zero_one_clamp_0-seed_1/20220108145735/model.pth"
-    testing_file ="log_files/NoiseAug/PGD_baseline-image_normalize--epochs_30-lr_schedule_cyclic-lr_max_0.3-epsilon_16-attack_steps_3-alpha_6.6666-delta_init_zero-zero_one_clamp_1-seed_1/20220108142635/model.pth"
+    # testing_file = "log_files/NoiseAug/PGD_baseline-image_normalize--epochs_30-lr_schedule_cyclic-lr_max_0.3-epsilon_16-attack_steps_3-alpha_6.6666-delta_init_zero-zero_one_clamp_1-seed_1/20220108142635/model.pth"
+    testing_file = args.testing_file
     # TE
     #testing_file = "log_files/NoiseAug/PGD_baseline-image_normalize--NoiseAug-_type_uniform-noise_aug_size_2.0--epochs_40-lr_schedule_cyclic-lr_max_0.2-epsilon_16-attack_steps_2-alpha_8.0-delta_init_zero-zero_one_clamp_0-seed_2/20220108173245/model.pth"
     state_dict_loaded = torch.load(testing_file)
 
-    logfile = "/".join(testing_file.split("/")[:-2]) + "/AutoAttack_testing.log"
+    logfile = "/".join(testing_file.split("/")
+                       [:-1]) + "/AutoAttack_testing.log"
+    if os.path.exists(logfile):
+        os.remove(logfile)
     logging.basicConfig(
         format='[%(asctime)s] - %(message)s',
         datefmt='%Y/%m/%d %H:%M:%S',
@@ -106,33 +117,53 @@ def main():
     logger.info(args)
 
     # eps 16
-    epsilon = (16 / 255.)
-    test_alpha = (4 / 255.)
+    epsilon = (args.epsilon / 255.)
+    # test_alpha = (args.alpha / 255.)
+    test_alpha = (epsilon / 4.)
     # eps 8
     # epsilon = (8 / 255.) / std
     # test_alpha = (2 / 255.) / std
 
     # Final Evaluation (record with tensorboard)
-    model_test = PreActResNet18().cuda() ### to make sure that the robustness evaluation is done on single precision instead of half-precision
-    model_test.load_state_dict(state_dict_loaded)
+    # to make sure that the robustness evaluation is done on single precision instead of half-precision
+    model_test = PreActResNet18().cuda()
+    model_test.load_state_dict(state_dict_loaded, strict=False)
     model_test.float()
     model_test.eval()
-    _, test_loader, _ = get_loaders(args.data_dir, args.batch_size, args.image_normalize, cifar10_mean, cifar10_std)
+    _, _, test_loader = get_loaders(
+        args.data_dir, args.batch_size, args.image_normalize, cifar10_mean, cifar10_std)
 
-
-    pgd_loss, pgd_acc = evaluate_pgd(test_loader, model_test, 50, 10, epsilon, test_alpha, lower_limit, upper_limit, opt=None, logger=logger)
-    #pgd_loss, pgd_acc = evaluate_pgd(test_loader, model_test, 50, 1, epsilon, test_alpha, lower_limit, upper_limit, opt=None, logger=logger)
+    # pgd_loss, pgd_acc = evaluate_pgd(test_loader, model_test, 50, 10, epsilon,
+    #                                  test_alpha, lower_limit, upper_limit, opt=None, logger=logger)
+    pgd_loss, pgd_acc = evaluate_autoattack(test_loader, model_test, epsilon)
+    # pgd_loss, pgd_acc = evaluate_pgd(test_loader, model_test, 50, 1, epsilon, test_alpha, lower_limit, upper_limit, opt=None, logger=logger)
     test_loss, test_acc = evaluate_standard(test_loader, model_test)
 
-
     logger.info('Test Loss \t Test Acc \t PGD Loss \t PGD Acc')
-    logger.info('%.4f \t \t %.4f \t %.4f \t %.4f', test_loss, test_acc, pgd_loss, pgd_acc)
+    logger.info('%.4f \t \t %.4f \t %.4f \t %.4f',
+                test_loss, test_acc, pgd_loss, pgd_acc)
 
 
-def evaluate_autoattack(test_loader, model):
-
-    aa_acctacker = AutoAttack(model, norm='Linf', eps=, version='standard', n_classes=10, seed=None, verbose=True)
-
+def evaluate_autoattack(test_loader, model, epsilon):
+    pgd_loss = 0
+    pgd_acc = 0
+    n = 0
+    model.eval()
+    aa_attacker = AutoAttack(model, norm='Linf', eps=epsilon,
+                             version='standard', n_classes=10, seed=None, verbose=False)
+    for i, (X, y) in enumerate(test_loader):
+        X, y = X.cuda(), y.cuda()
+        adv_image = aa_attacker(X, y)
+        with torch.no_grad():
+            output = model(adv_image)
+            loss = F.cross_entropy(output, y)
+            pgd_loss += loss.item()*y.size(0)
+            pgd_acc += (output.max(1)[1] == y).sum().item()
+            n += y.size(0)
+            print("bacth id:%d,pgd accuracy:%f" % (i, pgd_acc/n), flush=True)
+            if logger is not None:
+                logger.info('batch id: %d, pgd accuracy: %f', i, pgd_acc/n)
+    return pgd_loss/n, pgd_acc/n
 
 
 if __name__ == "__main__":
