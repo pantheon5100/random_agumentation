@@ -8,3 +8,4 @@ NoiseAug/
 supervised_training/
 *.pdf
 *.png
+*.csv
