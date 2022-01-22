@@ -9,3 +9,6 @@ supervised_training/
 *.pdf
 *.png
 *.csv
+*.pth
+generating_examples_logger
+
