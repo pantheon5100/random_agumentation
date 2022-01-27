@@ -20,27 +20,81 @@ def clamp(X, lower_limit, upper_limit):
     return torch.max(torch.min(X, upper_limit), lower_limit)
 
 
-def get_loaders(dir_, batch_size, image_normalize, cifar10_mean, cifar10_std):
+import torch
+import numpy as np
+
+
+class Cutout(object):
+    """Randomly mask out one or more patches from an image.
+    Args:
+        n_holes (int): Number of patches to cut out of each image.
+        length (int): The length (in pixels) of each square patch.
+    """
+    def __init__(self, n_holes, length):
+        self.n_holes = n_holes
+        self.length = length
+
+    def __call__(self, img):
+        """
+        Args:
+            img (Tensor): Tensor image of size (C, H, W).
+        Returns:
+            Tensor: Image with n_holes of dimension length x length cut out of it.
+        """
+        h = img.size(1)
+        w = img.size(2)
+
+        mask = np.ones((h, w), np.float32)
+
+        for n in range(self.n_holes):
+            y = np.random.randint(h)
+            x = np.random.randint(w)
+
+            y1 = np.clip(y - self.length // 2, 0, h)
+            y2 = np.clip(y + self.length // 2, 0, h)
+            x1 = np.clip(x - self.length // 2, 0, w)
+            x2 = np.clip(x + self.length // 2, 0, w)
+
+            mask[y1: y2, x1: x2] = 0.
+
+        mask = torch.from_numpy(mask)
+        mask = mask.expand_as(img)
+        img = img * mask
+
+        return img
+
+def get_loaders(dir_, batch_size, image_normalize, cifar10_mean, cifar10_std, cutout, n_holes, length):
     if image_normalize:
-        train_transform = transforms.Compose([
+        train_transform = [
             transforms.RandomCrop(32, padding=4),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             transforms.Normalize(cifar10_mean, cifar10_std),
-        ])
+        ]
+        if cutout:
+            train_transform.append(Cutout(n_holes=n_holes, length=length))
+            
+        
         test_transform = transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize(cifar10_mean, cifar10_std),
         ])
     else:
-        train_transform = transforms.Compose([
+        train_transform = [
             transforms.RandomCrop(32, padding=4),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
-        ])
+        ]
+
+        if cutout:
+            train_transform.append(Cutout(n_holes=n_holes, length=length))
+            
         test_transform = transforms.Compose([
             transforms.ToTensor(),
         ])
+    
+    
+    train_transform = transforms.Compose(train_transform)
 
     num_workers = 2
     train_dataset = datasets.CIFAR10(

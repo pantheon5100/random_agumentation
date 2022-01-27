@@ -1,7 +1,5 @@
 
-for i in 0 1 2 3 4
-do
-python train_pgd_NoiseAug.py --batch-size 128 \
+python train_fgsm_NoiseAug_supervised_linearity_measure.py --batch-size 128 \
     --data-dir /dev/shm \
     --epochs 30 \
     --lr-schedule cyclic \
@@ -12,11 +10,9 @@ python train_pgd_NoiseAug.py --batch-size 128 \
     --alpha 4 \
     --attack-iters 2 \
     --delta-init zero \
-    --out-dir pgd2-noise-aug \
-    --seed $i \
-    --noise_aug \
-    --noise_aug_type normal \
-    --noise_aug_size 1 \
+    --out-dir supervised_baseline_eps8 \
+    --seed 0 \
+    --zero_one_clamp 0 \
+    --mixup \
+    --mixup-alpha 1.4 \
     --image_normalize
-done
-
