@@ -1,4 +1,5 @@
 import argparse
+import imp
 import logging
 import os
 import time
@@ -138,6 +139,7 @@ def main():
 
     train_loader, test_loader, val_loader = get_loaders(args.data_dir, args.batch_size, args.image_normalize, cifar10_mean, cifar10_std)
 
+    aa_epsilon = args.epsilon/255.
     epsilon = (args.epsilon / 255.) / std
     alpha = (args.alpha / 255.) / std
 
@@ -227,17 +229,6 @@ def main():
             train_n += y.size(0)
             scheduler.step()
 
-        if args.early_stop:
-            # Check current PGD robustness of model using random minibatch
-            X, y = first_batch
-            pgd_delta = attack_pgd(model, X, y, epsilon, pgd_alpha, 5, 1, lower_limit, upper_limit, opt)
-            with torch.no_grad():
-                output = model(clamp(X + pgd_delta[:X.size(0)], lower_limit, upper_limit))
-            robust_acc = (output.max(1)[1] == y).sum().item() / y.size(0)
-            if robust_acc - prev_robust_acc < -0.2:
-                break
-            prev_robust_acc = robust_acc
-            best_state_dict = copy.deepcopy(model.state_dict())
 
 
         epoch_time = time.time()
@@ -278,6 +269,43 @@ def main():
     logger.info(f'Training Time Consuming:{training_time_accumelater}')
 
 
+    # AA eval
+    test_loss = 0
+    test_acc = 0
+    n = 0
+    model_test.eval()
+    model_test.forward_norm = True
+    with torch.no_grad():
+        for i, (X, y) in enumerate(test_loader):
+            X, y = X.cuda(), y.cuda()
+            output = model_test(X)
+            loss = F.cross_entropy(output, y)
+            test_loss += loss.item() * y.size(0)
+            test_acc += (output.max(1)[1] == y).sum().item()
+            n += y.size(0)
+
+    # epsilon = (8 / 255.) / std
+    # alpha = (2 / 255.) / std
+    auto_loss = 0
+    auto_acc = 0
+    n = 0
+    from torchattacks import AutoAttack
+
+    model_test.eval()
+    attack = AutoAttack(model_test, norm='Linf', eps=aa_epsilon, version='standard', n_classes=10, seed=None, verbose=False)
+    for i, (X, y) in enumerate(test_loader):
+        X, y = X.cuda(), y.cuda()
+        adv_images = attack(X, y)
+        with torch.no_grad():
+            # output = model(X + pgd_delta)
+            output = model_test(adv_images)
+            loss = F.cross_entropy(output, y)
+            auto_loss += loss.item() * y.size(0)
+            auto_acc += (output.max(1)[1] == y).sum().item()
+            n += y.size(0)
+            print('batch id: %d, autoattack accuracy: %f'%(i, auto_acc/n), flush=True)
+            if logger is not None:
+                logger.info('batch id: %d, autoattack accuracy: %f', i, auto_acc/n)
 
 if __name__ == "__main__":
     main()
