@@ -63,7 +63,7 @@ class Cutout(object):
 
         return img
 
-def get_loaders(dir_, batch_size, image_normalize, cifar10_mean, cifar10_std, cutout, n_holes, length):
+def get_loaders(dir_, batch_size, image_normalize, cifar10_mean, cifar10_std, cutout=False, n_holes=1, length=14):
     if image_normalize:
         train_transform = [
             transforms.RandomCrop(32, padding=4),
